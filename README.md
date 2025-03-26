@@ -51,3 +51,145 @@ server {
     return 301 https://$host$request_uri;
 }
 </pre>
+
+# Automated ansible playbook
+- Installed `ansible` using following command
+<pre>sudo apt update && sudo apt install -y ansible</pre>
+- `deploy.yml`
+<pre>
+---
+- name: Setup EC2 Instance and Configure Nginx
+  hosts: localhost
+  become: yes
+  vars:
+    ansible_user: ubuntu
+    domain_name: 192.168.18.176
+
+  tasks:
+
+    - name: Update and upgrade system packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Create directories for web pages
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+      loop:
+        - /var/www/task1
+        - /var/www/task2
+
+    - name: Create index.html for page1
+      copy:
+        dest: /var/www/task1/index.html
+        content: "<h1>Welcome to Page 1</h1>"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    - name: Create index.html for page2
+      copy:
+        dest: /var/www/task2/index.html
+        content: "<h1>Welcome to Page 2</h1>"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    - name: Configure Nginx
+      copy:
+        dest: /etc/nginx/sites-available/default
+        content: |
+          server {
+              listen 80;
+              server_name _;
+
+              location /page1 {
+                  root /var/www/task1;
+                  index index.html;
+              }
+
+              location /page2 {
+                  root /var/www/task2;
+                  index index.html;
+              }
+          }
+      notify:
+        - Restart Nginx
+
+    - name: Allow HTTP and HTTPS traffic
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "80"
+        - "443"
+
+    - name: Install Certbot and dependencies
+      apt:
+        name: certbot
+        state: present
+
+    - name: Generate SSL Certificate
+      command: certbot certonly --nginx --non-interactive --agree-tos --email your-email@example.com -d "{{ domain_name }}"
+      args:
+        creates: "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem"
+      notify:
+        - Restart Nginx
+
+    - name: Configure Nginx with SSL
+      copy:
+        dest: /etc/nginx/sites-available/default
+        content: |
+          server {
+              listen 443 ssl;
+              server_name {{ domain_name }};
+
+              ssl_certificate /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem;
+              ssl_certificate_key /etc/letsencrypt/live/{{ domain_name }}/privkey.pem;
+
+              location /page1 {
+                  root /var/www/task1;
+                  index index.html;
+              }
+
+              location /page2 {
+                  root /var/www/task2;
+                  index index.html;
+              }
+          }
+
+          server {
+              listen 80;
+              server_name {{ domain_name }};
+              return 301 https://$host$request_uri;
+          }
+      notify:
+        - Restart Nginx
+
+    - name: Add SSH key to the user
+      authorized_key:
+        user: ubuntu
+        key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+        state: present
+
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+</pre>
+
+- Outout
+<pre>ansible-playbook -i inventory deploy.yml</pre>
+
+![Ansible Playbook](./images/ansible_playbook.png)
